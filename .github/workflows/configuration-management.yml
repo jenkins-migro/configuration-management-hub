@@ -1,0 +1,289 @@
+name: Configuration Management Hub
+
+on:
+  workflow_dispatch:
+    inputs:
+      TARGET:
+        description: Target controller for image generation
+        type: choice
+        options:
+          - ACP3
+          - ACP3.1
+        default: ACP3
+      skip_image_creation:
+        description: Skip image creation and run packaging against existing versions
+        type: boolean
+        default: false
+      merge_existing_apps:
+        description: Inject additional software cluster content
+        type: boolean
+        default: false
+      skip_qdownload_generation:
+        description: Skip QDownloadable generation
+        type: boolean
+        default: false
+      trigger_prod_packager:
+        description: Generate production packages
+        type: boolean
+        default: false
+      full_package:
+        description: Generate full production package
+        type: boolean
+        default: false
+      cal_package:
+        description: Generate calibration package
+        type: boolean
+        default: false
+      delta_package:
+        description: Generate delta production package
+        type: boolean
+        default: false
+      reverse_delta_package:
+        description: Generate reverse-delta production package
+        type: boolean
+        default: false
+      ASCII_Version:
+        description: ASCII version
+        type: string
+        required: false
+      acpx_soc_buildrelease_branch:
+        description: acpx-soc-buildrelease branch
+        type: string
+        default: master
+      acpx_soc_calibration_branch:
+        description: Calibration branch
+        type: string
+        default: master
+      artifactory_upload_location_root:
+        description: Artifactory upload root
+        type: choice
+        options:
+          - acpx-soc-release/testing
+          - acpx-soc-test
+        default: acpx-soc-release/testing
+      force_override_package:
+        description: Override an existing package in Artifactory
+        type: boolean
+        default: false
+      additional_parameters_json:
+        description: JSON object for additional migrated Jenkins parameters such as Application, AdaptiveExecutables, Calibration, NN_Models, soc_version, package_purpose, boot_security, qtd_use, and Cal_source
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: configuration-management-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  SWCL_ROOT_DIR: sw_cluster_contents
+  IMAGE_OUTPUT_PATH: SoCImagesToUpload
+  QTD_IMAGE_OUTPUT_PATH: SoCQTDImagesToUpload
+  IMAGE_CREATION_ENV_USER: ACPx_Prebuilds
+  CONAN_PKG_SETTINGS: -s compiler=gcc -s compiler.version=7 -s compiler.libcxx=libstdc++
+  GM_QNX_CHANNEL: profile
+  CURRENT_MULTI_IMG_DIR: current_multi_images
+  OLD_MULTI_IMG_DIR: old_multi_images
+  MULTI_SWCL_GEN_WS: swcl_generation_ws
+  MULTI_DELTA_SWCL_GEN_WS: swcl_generation_delta_ws
+  SWCL_GEN_SUB_DIR: vector_manifests
+  SHIPPING_PKG_DIR: shipping_pkg_dir
+  CURRENT_QTD_IMG_STAGING_DIR: current_qtd_img_staging
+  ARTIFACTORY_URL: https://artifactory-wrn.ultracruise.gm.com/artifactory
+  VERSION_TRACKING_DB_LOCATION: acp3-archive-local/ASCII_version_database/
+
+jobs:
+  pipeline-setup:
+    name: Pipeline setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      artifactory-ui-url: ${{ steps.artifactory.outputs.url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Resolve Artifactory service URL
+        id: artifactory
+        run: |
+          echo "url=${ARTIFACTORY_URL}" >> "$GITHUB_OUTPUT"
+
+  filesystem-configuration:
+    name: Get filesystem configuration for platform
+    runs-on: ubuntu-latest
+    needs: pipeline-setup
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set input configuration map
+        run: |
+          echo "Migrated Jenkins shared-library routine: SetInputConfigMap.RunRoutine"
+          echo "Port the acp3_shared_library implementation here or call the replacement CLI."
+
+  software-cluster-filesystem:
+    name: Software cluster filesystem generator
+    runs-on: ubuntu-latest
+    needs: filesystem-configuration
+    if: ${{ !inputs.skip_image_creation }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Generate software cluster filesystem
+        run: |
+          echo "Migrated Jenkins shared-library routine: SoftwareClusterFilesystemGenerator.RunRoutine"
+          echo "Inputs: TARGET=${{ inputs.TARGET }}, merge_existing_apps=${{ inputs.merge_existing_apps }}"
+
+  prebuild-environment:
+    name: Prebuild environment preparation
+    runs-on: ubuntu-latest
+    needs: filesystem-configuration
+    if: ${{ !inputs.skip_image_creation }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prepare image creation environment
+        run: |
+          echo "Migrated Jenkins shared-library routine: ImageCreationEnvironmentSetUp.RunRoutine"
+          echo "Runner: ${RUNNER_NAME}"
+
+  inject-filesystems:
+    name: Inject software cluster filesystems
+    runs-on: ubuntu-latest
+    needs:
+      - software-cluster-filesystem
+      - prebuild-environment
+    if: ${{ inputs.merge_existing_apps && !inputs.skip_image_creation }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Inject software cluster filesystem
+        run: |
+          echo "Migrated Jenkins shared-library routine: SoftwareClusterFilesystemInjector.RunRoutine"
+
+  ucm-db-update:
+    name: UCM DB update
+    runs-on: ubuntu-latest
+    needs:
+      - software-cluster-filesystem
+      - prebuild-environment
+    if: ${{ !inputs.skip_image_creation }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Generate UCM DB
+        run: |
+          echo "Migrated Jenkins shared-library routine: UCMDbGenerator.RunRoutine"
+
+  create-software-cluster-images:
+    name: Create software cluster images
+    runs-on: ubuntu-latest
+    needs:
+      - prebuild-environment
+      - ucm-db-update
+      - inject-filesystems
+    if: ${{ always() && !inputs.skip_image_creation && needs.prebuild-environment.result == 'success' && needs.ucm-db-update.result == 'success' && (needs.inject-filesystems.result == 'success' || needs.inject-filesystems.result == 'skipped') }}
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create software cluster images
+        run: |
+          echo "Migrated Jenkins shared-library routine: SoftwareClusterImageGenerator.RunRoutine"
+
+  development-package:
+    name: Prepare inputs and generate development packages
+    runs-on: ubuntu-latest
+    needs: create-software-cluster-images
+    if: ${{ always() && !inputs.skip_qdownload_generation && (needs.create-software-cluster-images.result == 'success' || needs.create-software-cluster-images.result == 'skipped') }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download SoC cluster images from Artifactory
+        run: |
+          echo "Migrated Jenkins shared-library routine: SoCImageDownloader.RunRoutine"
+      - name: Assemble SoC development package
+        run: |
+          echo "Migrated Jenkins shared-library routine: SoCDevPackageAssembler.RunRoutine"
+
+  production-package-inputs:
+    name: Prepare production package inputs
+    runs-on: ubuntu-latest
+    needs: development-package
+    if: ${{ always() && inputs.trigger_prod_packager && (needs.development-package.result == 'success' || needs.development-package.result == 'skipped') }}
+    timeout-minutes: 120
+    outputs:
+      ascii-version: ${{ steps.spu.outputs.ascii-version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prepare production package inputs
+        run: |
+          echo "Migrated Jenkins shared-library routine: ProdPackageInputGenerator.RunRoutine"
+      - name: Determine applicable SPU SoC version in ASCII format
+        id: spu
+        run: |
+          echo "Migrated Jenkins shared-library routine: DetermineSpuSocVersion.RunRoutine"
+          echo "ascii-version=${{ inputs.ASCII_Version }}" >> "$GITHUB_OUTPUT"
+
+  full-production-package:
+    name: Create full production package
+    runs-on: ubuntu-latest
+    needs: production-package-inputs
+    if: ${{ inputs.trigger_prod_packager && inputs.full_package }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create full production package
+        run: |
+          echo "Migrated Jenkins shared-library routine: FullPackageGenerator.RunRoutine"
+
+  delta-production-package:
+    name: Create delta production package
+    runs-on: ubuntu-latest
+    needs: production-package-inputs
+    if: ${{ inputs.trigger_prod_packager && inputs.delta_package }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create delta production package
+        run: |
+          echo "Migrated Jenkins shared-library routine: DeltaPackageGenerator.RunRoutine"
+
+  reverse-delta-production-package:
+    name: Create reverse delta production package
+    runs-on: ubuntu-latest
+    needs: production-package-inputs
+    if: ${{ inputs.trigger_prod_packager && inputs.reverse_delta_package }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create reverse delta production package
+        run: |
+          echo "Migrated Jenkins shared-library routine: ReverseDeltaPackageGenerator.RunRoutine"
+
+  calibration-package:
+    name: Create calibration package
+    runs-on: ubuntu-latest
+    needs: production-package-inputs
+    if: ${{ inputs.trigger_prod_packager && inputs.cal_package }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create calibration package
+        run: |
+          echo "Migrated Jenkins shared-library routine: CalProdPackager.RunRoutine"
