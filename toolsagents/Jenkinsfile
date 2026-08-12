@@ -1,0 +1,62 @@
+<![CDATA[
+// Source: https://github.com/jenkinsci/pipeline-examples (MIT License)
+// Test case: Tools and different agents per stage
+pipeline {
+  agent none
+  
+  stages {
+    stage("Build") {
+      agent {
+        label 'linux'
+      }
+      tools {
+        maven "apache-maven-3.6.3"
+        jdk "jdk-11"
+      }
+      steps {
+        checkout scm
+        sh 'echo "M2_HOME: ${M2_HOME}"'
+        sh 'echo "JAVA_HOME: ${JAVA_HOME}"'
+        sh 'mvn clean compile -Dmaven.test.skip=true'
+        stash includes: 'target/**/*', name: 'build-artifacts'
+      }
+    }
+    
+    stage("Test") {
+      agent {
+        label 'linux'
+      }
+      tools {
+        maven "apache-maven-3.6.3"
+        jdk "jdk-11"
+      }
+      steps {
+        unstash 'build-artifacts'
+        sh 'mvn test'
+      }
+      post {
+        always {
+          publishTestResults testResultsPattern: 'target/surefire-reports/*.xml'
+          publishCoverage adapters: [jacocoAdapter('target/site/jacoco/jacoco.xml')]
+        }
+      }
+    }
+    
+    stage("Quality") {
+      agent {
+        label 'sonar'
+      }
+      tools {
+        maven "apache-maven-3.6.3"
+      }
+      environment {
+        SONAR = credentials('sonar-token')
+      }
+      steps {
+        unstash 'build-artifacts'
+        sh 'mvn sonar:sonar -Dsonar.login=$SONAR'
+      }
+    }
+  }
+}
+    ]]>
