@@ -1,0 +1,92 @@
+<![CDATA[
+// Source: https://github.com/jenkinsci/pipeline-examples (MIT License)  
+// Test case: Git operations and repository management
+node {
+    stage('Checkout') {
+        checkout scm
+        
+        script {
+            env.GIT_COMMIT_SHORT = sh(
+                script: "git rev-parse --short HEAD",
+                returnStdout: true
+            ).trim()
+            
+            env.GIT_BRANCH = sh(
+                script: "git rev-parse --abbrev-ref HEAD",
+                returnStdout: true
+            ).trim()
+        }
+    }
+    
+    stage('Build') {
+        sh 'echo "Building commit ${GIT_COMMIT_SHORT} from branch ${GIT_BRANCH}"'
+        sh 'mvn clean package -DskipTests'
+    }
+    
+    stage('Test') {
+        sh 'mvn test'
+        publishTestResults testResultsPattern: '**/surefire-reports/*.xml'
+    }
+    
+    stage('Tag Release') {
+        when {
+            branch 'master'
+        }
+        
+        withCredentials([usernamePassword(credentialsId: 'git-credentials', 
+                                         usernameVariable: 'GIT_USERNAME', 
+                                         passwordVariable: 'GIT_PASSWORD')]) {
+            sh '''
+                git config user.name "Jenkins CI"
+                git config user.email "jenkins@example.com"
+                
+                # Create and push tag
+                TAG_NAME="v1.0.${BUILD_NUMBER}"
+                git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
+                
+                # Push to origin with credentials
+                git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/example/repo.git --tags
+            '''
+        }
+    }
+    
+    stage('Update Version') {
+        script {
+            def newVersion = "1.0.${BUILD_NUMBER}"
+            
+            sh """
+                # Update version in pom.xml
+                mvn versions:set -DnewVersion=${newVersion}
+                mvn versions:commit
+            """
+            
+            // Commit version change
+            withCredentials([usernamePassword(credentialsId: 'git-credentials',
+                                             usernameVariable: 'GIT_USERNAME',
+                                             passwordVariable: 'GIT_PASSWORD')]) {
+                sh '''
+                    git add pom.xml
+                    git commit -m "Update version to ${newVersion} [skip ci]"
+                    git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/example/repo.git HEAD:${GIT_BRANCH}
+                '''
+            }
+        }
+    }
+    
+    stage('Archive') {
+        archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+        
+        // Create release notes
+        sh '''
+            echo "# Release Notes" > RELEASE_NOTES.md
+            echo "## Version: v1.0.${BUILD_NUMBER}" >> RELEASE_NOTES.md
+            echo "## Commit: ${GIT_COMMIT_SHORT}" >> RELEASE_NOTES.md
+            echo "## Branch: ${GIT_BRANCH}" >> RELEASE_NOTES.md
+            echo "## Changes:" >> RELEASE_NOTES.md
+            git log --oneline HEAD~5..HEAD >> RELEASE_NOTES.md
+        '''
+        
+        archiveArtifacts artifacts: 'RELEASE_NOTES.md', fingerprint: true
+    }
+}
+    ]]>
